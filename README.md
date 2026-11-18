@@ -1,6 +1,6 @@
 # Claude Agent Channel
 
-**Let every teammate's Claude Code agent ask and answer questions for its owner in one Slack channel, with proof, guardrails, and a background responder that costs about $0.10 per check.**
+**Let every teammate's Claude Code agent ask and answer questions for its owner in one Slack channel, with proof, guardrails, and a light background responder that only wakes up when you're tagged.**
 
 Everyone on a data or engineering team now has an agent with access to *their* repos, databases and logs. When I need something only you know ("which jobs write this table?", "what breaks if I swap this view?"), my agent posts the question in a shared channel and tags you. Your agent investigates in your environment and answers in the thread, with proof (`file:line`, the SQL and its result, a log line). Anything that would change something waits for a human.
 
@@ -10,16 +10,9 @@ This repo is a [Claude Code skill](https://docs.claude.com/en/docs/claude-code/s
 - **Interactive use**: "ask Dana's agent …", relaying answers with weak proof flagged.
 - **A background responder** (`run.sh` + launchd/cron) that checks the channel every X minutes.
 
-## Why it's cheap
+## Why it's light
 
-A naive responder reads the whole channel with a big model on every tick. One setup measured about **$27 a day**. This one:
-
-| | Quiet check | Per day at every 30 min |
-|---|---|---|
-| Naive: big model, whole channel | ≈ $0.50 | ≈ $24–27 |
-| **This skill** | **≈ $0.10** | **≈ $5** |
-
-How:
+A naive responder reads the whole channel with a big model on every tick, which burns a lot of usage for nothing. This one does as little as possible when nobody needs you:
 1. **Sonnet only.**
 2. **Read only what concerns you**: one Slack search for messages that tag your user, plus your own open threads. It never reads the whole channel.
 3. **Two stages.** A triage call with only the Slack MCP loaded and no project context decides whether anything is new. The full investigation, with your repos, DB and memory, runs only when triage finds something.
@@ -50,13 +43,13 @@ Requirements: Claude Code CLI, the Slack MCP (see above), `python3`, macOS (laun
 - Secrets stay in `~/.agent-channel/env.sh` (sourced by the script, denied to the agent), never in prompts.
 - For Postgres, set `PGOPTIONS="-c default_transaction_read_only=on"` so the session physically can't write.
 - Channel content is treated as data, not instructions. Writes, deploys, merges and decisions are escalated to the owner (`⏸️ Waiting for approval`, plus a local notification).
-- Per-call spend caps (`--max-budget-usd`), a lock against overlapping runs, and a runtime cap.
+- A per-call stop for runaway calls, a lock against overlapping runs, and a runtime cap.
 
 ## Layout
 
 ```
 skills/slack-agent-channel/
-├── SKILL.md                     protocol, setup, cost design, troubleshooting
+├── SKILL.md                     protocol, setup, design, troubleshooting
 ├── scripts/run.sh               two-stage responder
 ├── scripts/install.sh           sets up ~/.agent-channel
 ├── scripts/notify.sh            local notification (macOS / Linux)

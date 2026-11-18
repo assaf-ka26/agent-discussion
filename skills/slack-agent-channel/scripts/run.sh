@@ -16,8 +16,9 @@ INTERVAL_MIN=${INTERVAL_MIN:-30}
 POLL=${POLL:-30}
 IDLE_LIMIT=${IDLE_LIMIT:-120}
 MAX_RUNTIME=$(( INTERVAL_MIN > 6 ? (INTERVAL_MIN - 5) * 60 : 60 ))   # never overlap the next run
-TRIAGE_BUDGET=${TRIAGE_BUDGET:-0.50}
-ANSWER_BUDGET=${ANSWER_BUDGET:-5}
+# safety stop for a runaway call (passed to --max-budget-usd); a normal call stays far below it
+TRIAGE_CAP=${TRIAGE_CAP:-0.50}
+ANSWER_CAP=${ANSWER_CAP:-5}
 SLACK_SERVER=${SLACK_SERVER:-slack-agents}
 DRY_RUN=${DRY_RUN:-0}
 PREFIX="🤖 ${OWNER_NAME}'s agent"
@@ -74,7 +75,7 @@ open(p,"w").write(json.dumps(d)+"\n")
 EOF
 }
 
-# call <prompt> <tools> <budget> [resume-session] → "<session_id>\t<result on one line>"; extra flags via $EXTRA
+# call <prompt> <tools> <cap> [resume-session] → "<session_id>\t<result on one line>"; extra flags via $EXTRA
 call() {
   "$CLAUDE" -p "$1" ${4:+--resume "$4"} --model "$MODEL" --output-format json \
     --permission-mode dontAsk --max-budget-usd "$3" \
@@ -83,7 +84,7 @@ call() {
 try: d=json.load(sys.stdin)
 except Exception as e: print("\t(no json: %s)" % e); sys.exit()
 r=d.get("result") or ""
-print(r, "\n[cost $%.2f]" % (d.get("total_cost_usd") or 0), file=sys.stderr)
+print(r, "\n[turns %s]" % d.get("num_turns", "?"), file=sys.stderr)
 print(d.get("session_id",""), r.replace("\n"," || "), sep="\t")'
 }
 
@@ -97,7 +98,7 @@ triage() {  # prints "none", "unclear", or a csv of thread-root ts
 2. For each thread ts in [${open}]: ${S}_read_thread channel_id $CHANNEL_ID, message_ts <ts>, oldest \"$since\", response_format detailed.
 Keep only messages newer than $since that do NOT start with \"$PREFIX\" (also written \":robot_face: ${OWNER_NAME}'s agent\") — those are ours.
 Thread-root ts = the thread_ts in the permalink, or Message_ts when there is none.
-Reply with exactly one line: NEW: <comma-separated thread-root ts of the kept messages> or NEW: none." "$TRIAGE_TOOLS" "$TRIAGE_BUDGET")
+Reply with exactly one line: NEW: <comma-separated thread-root ts of the kept messages> or NEW: none." "$TRIAGE_TOOLS" "$TRIAGE_CAP")
   res=${out#*$'\t'}
   new=$(grep -oE 'NEW: *[0-9][0-9., ]*' <<<"$res" | head -1 | sed 's/NEW: *//; s/ //g')
   # only an explicit "NEW: none" means nothing new; anything unclear is treated as new
@@ -114,7 +115,7 @@ answer() {  # answer <ts csv|unclear> [resume-session] → prints session id
 Channel: $CHANNEL_ID. You are ${OWNER_NAME}'s agent (owner Slack ID $OWNER_ID); prefix every message with \"$PREFIX:\".
 Triage found new messages in these threads (root ts): $1.
 Read only those threads (slack_read_thread). Do not scan the rest of the channel. If the list is \"unclear\", instead search \"in:<#$CHANNEL_ID> <@$OWNER_ID>\" after $(state last_ts) and re-read the open threads [$(state open_threads)].
-Handle them per the runbook. Last line: OPEN_THREADS: <comma-separated thread-root ts still waiting on something>.$NOTE" "$ANSWER_TOOLS" "$ANSWER_BUDGET" "${2:-}")
+Handle them per the runbook. Last line: OPEN_THREADS: <comma-separated thread-root ts still waiting on something>.$NOTE" "$ANSWER_TOOLS" "$ANSWER_CAP" "${2:-}")
   ot=$(grep -oE 'OPEN_THREADS: *[0-9., ]*' <<<"${out#*$'\t'}" | tail -1 | sed 's/OPEN_THREADS: *//; s/ //g')
   # checkpoint = when this stage started reading; anything posted later is caught by the next triage
   save_state "$astart.000000" "${ot:--}"

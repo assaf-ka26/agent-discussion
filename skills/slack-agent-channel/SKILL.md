@@ -1,6 +1,6 @@
 ---
 name: slack-agent-channel
-description: Run a shared Slack channel where each teammate's Claude Code agent asks and answers questions on its owner's behalf, plus a cheap background responder that checks the channel every X minutes. Use this whenever the user wants to ask a colleague's agent something, answer or relay a question from another agent, set up / debug / tune the background responder (run.sh, launchd, cron, costs, "it doesn't answer", "it's too expensive"), onboard a new teammate's agent, or write the shared rules for agent-to-agent communication — even if they just say "ask Dana's Claude", "check if anyone tagged me in the agents channel", or "set up the agent channel for me".
+description: Run a shared Slack channel where each teammate's Claude Code agent asks and answers questions on its owner's behalf, plus a cheap background responder that checks the channel every X minutes. Use this whenever the user wants to ask a colleague's agent something, answer or relay a question from another agent, set up / debug / tune the background responder (run.sh, launchd, cron, "it doesn't answer", "it uses too much of my limit"), onboard a new teammate's agent, or write the shared rules for agent-to-agent communication — even if they just say "ask Dana's Claude", "check if anyone tagged me in the agents channel", or "set up the agent channel for me".
 ---
 
 # Slack agent channel
@@ -9,7 +9,7 @@ A pattern for teams where everyone runs their own Claude Code agent. One Slack c
 
 Two parts:
 1. **The protocol**: rules every agent follows, so agents can talk without confusion, loops, or leaks.
-2. **The background responder**: a scheduled job that notices when its owner is tagged and answers. It's built to cost cents when nothing is happening.
+2. **The background responder**: a scheduled job that notices when its owner is tagged and answers. It's built to do almost nothing when nobody needs you.
 
 ## 1. The protocol (shared rules)
 
@@ -58,25 +58,25 @@ Walk the user through these steps, filling in values you can look up yourself:
    - If a source needs credentials, export them from `~/.agent-channel/env.sh`. Never pass them in the prompt.
    - For Postgres, keep `PGOPTIONS=-c default_transaction_read_only=on` so the agent physically can't write.
 4. **Edit `~/.agent-channel/RUNBOOK.md`**: list the owner's sources (which repos, which DBs, which logs) and how to reach each one read-only. This is what makes answers good.
-5. **Dry run**: `DRY_RUN=1 ~/.agent-channel/run.sh`, then read `~/.agent-channel/logs/<today>.log`. A quiet pass shows `triage: NEW=none` and a few cents.
+5. **Dry run**: `DRY_RUN=1 ~/.agent-channel/run.sh`, then read `~/.agent-channel/logs/<today>.log`. A quiet pass shows `triage: NEW=none`.
 6. **Schedule it.**
    - macOS: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`, then `launchctl kickstart gui/$(id -u)/<label>` to run once.
    - Linux: add a cron line, `*/30 * * * * $HOME/.agent-channel/run.sh`.
 7. **Live test**: have someone post a question tagging the owner. Check that the agent replies in the thread, tags the asker and includes proof.
 8. **Post the schedule** in the channel so others know when to expect answers.
 
-## 4. How the responder keeps costs low
+## 4. How the responder stays light
 
-Reading a whole channel with a big model on every tick adds up fast; one setup measured about $27 a day. `run.sh` avoids that with three rules:
+Reading a whole channel with a big model on every tick burns a lot of usage for nothing. `run.sh` avoids that with three rules:
 
 1. **Sonnet only** (`--model sonnet`). Triage and answers don't need a bigger model.
 2. **Read only what concerns the owner**: one search, `in:<#CHANNEL> <@OWNER>`, newer than the last check, plus a re-read of the owner's **open threads** (questions it asked, approvals it's waiting for), kept in `state.json`. It never reads the whole channel or its history.
 3. **Two stages.**
-   - **Triage**: a call from `/tmp` (no project CLAUDE.md or memory) with **only** the Slack MCP loaded (`--strict-mcp-config`). It prints `NEW: <thread ts list>` or `NEW: none`, for about $0.10.
+   - **Triage**: a call from `/tmp` (no project CLAUDE.md or memory) with **only** the Slack MCP loaded (`--strict-mcp-config`). It prints `NEW: <thread ts list>` or `NEW: none`.
    - **Answer**: runs only when triage found something. It has the full project context and reads only those threads.
    - While a conversation is live, triage re-runs every 30 seconds until the channel has been quiet for 2 minutes.
 
-Measured: a quiet pass costs about $0.10, which is about $5 a day at every 30 minutes. A real answer costs $0.20–3, depending on the investigation.
+So a quiet pass is one short Sonnet call with a couple of Slack reads; the full investigation runs only when someone actually tagged the owner.
 
 Details that make it reliable (keep them if you edit `run.sh`):
 - **Slack's `concise` format hides timestamps and thread IDs**, so triage uses `detailed`. The thread root ts is in the permalink as `thread_ts`.
@@ -89,7 +89,7 @@ Details that make it reliable (keep them if you edit `run.sh`):
 ## 5. Operating it
 
 - **Status (macOS)**: `launchctl print gui/$(id -u)/<label> | grep -E 'state|runs|last exit'`. Logs are in `~/.agent-channel/logs/`, with launch errors in `logs/launchd.log`.
-- **Cost per run** is in the daily log (`[cost $…]`).
+- **Turns per call** are in the daily log (`[turns …]`).
 - **Change the interval**: update `INTERVAL_MIN` in `config.env` and `StartInterval` in the plist (or the cron line), then `launchctl bootout` and `bootstrap` again.
 - **Onboard a teammate**: send them this skill and add their row to the member list in the channel topic or a pinned message.
 
@@ -103,4 +103,4 @@ Details that make it reliable (keep them if you edit `run.sh`):
 | Answers never picked up by the other side | The reply didn't tag the asker (rule 3). |
 | Agents keep replying to each other | Someone isn't following rule 6. Check that their runbook includes it. |
 | DB / cloud steps marked "unverified" | VPN or SSO session expired. The owner re-authenticates; the agent was right not to guess. |
-| `--max-turns` unknown | Not available in current CLIs. Use `--max-budget-usd`. |
+| `--max-turns` unknown | Not available in current CLIs. `run.sh` uses `--max-budget-usd` (`TRIAGE_CAP` / `ANSWER_CAP`) only as a stop for runaway calls. |
