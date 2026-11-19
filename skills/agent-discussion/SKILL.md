@@ -81,7 +81,7 @@ Reading a whole channel with a big model on every tick burns a lot of usage for 
 2. **Read only what concerns the owner**: one search, `in:<#CHANNEL> <@OWNER>`, newer than the last check, plus a re-read of the owner's **open threads** (questions it asked, approvals it's waiting for), kept in `state.json`. It never reads the whole channel or its history.
 3. **Two stages.**
    - **Triage** decides whether anything is new and prints `NEW: <thread ts list>`, `NEW: none` or `NEW: unclear`.
-     - **Script triage (default when `SLACK_TOKEN` is set)**: `slack_check.py` calls `search.messages` and `conversations.replies` directly. No model, so a quiet pass costs nothing against the plan's usage.
+     - **Script triage (default when `SLACK_TOKEN` is set)**: `slack_check.py` calls `search.messages` and `conversations.replies` directly. No model, so a quiet pass costs nothing against the plan's usage. If the script fails (bad token, missing scope, Slack down), that pass falls back to the LLM triage.
      - **LLM triage (fallback, no token)**: a short Sonnet call from `/tmp` (no project CLAUDE.md or memory) with **only** the Slack MCP loaded (`--strict-mcp-config`).
    - **Answer**: runs only when triage found something. It has the full project context and reads only those threads.
    - While a conversation is live, triage re-runs every 30 seconds until the channel has been quiet for 2 minutes.
@@ -109,7 +109,7 @@ Details that make it reliable (keep them if you edit `run.sh`):
 
 | Symptom | Cause / fix |
 |---|---|
-| Log says `slack_check: … invalid_auth` / `missing_scope` / `not_in_channel` / `channel_not_found` | The Slack token is wrong, lacks a scope from `slack-app-manifest.yml`, or the owner isn't a member of a private channel. Triage reports `unclear` and keeps the checkpoint, so nothing is lost; fix the token or remove `SLACK_TOKEN` to fall back to LLM triage. |
+| Log says `slack_check: … invalid_auth` / `missing_scope` / `not_in_channel` / `channel_not_found` | The Slack token is wrong, lacks a scope from `slack-app-manifest.yml`, or the owner isn't a member of a private channel. `run.sh` falls back to the LLM triage for that pass, so nothing is missed, but quiet passes use the model again until the token is fixed. |
 | launchd `last exit code = 126`, log says `Operation not permitted` | macOS privacy block: the script or `WORKDIR` is under `~/Documents`, `~/Desktop` or `~/Downloads`. Move them elsewhere. Avoid granting Full Disk Access to `/bin/bash`: it lets every bash script on the machine read the whole disk. |
 | Log says `Failed to authenticate` | The CLI's own login expired (separate from the desktop app). Run `claude auth login`. |
 | Log shows `agent-discussion guard: …` | A tool call outside the guard's scope. If it was legitimate, widen `READ_ROOTS`, `EXTRA_TOOLS` or `GH_REPO` in `config.env`. |

@@ -114,7 +114,10 @@ triage() {  # prints "none", "unclear", or a csv of thread-root ts
     # free: plain Slack API calls, no model. Same one-line contract as the LLM triage below.
     res=$(SLACK_TOKEN="$SLACK_CHECK_TOKEN" python3 "$AD/slack_check.py" --channel "$CHANNEL_ID" --owner "$OWNER_ID" \
       --since "$since" --open "$open" --prefix "$PREFIX" --prefix ":robot_face: ${OWNER_NAME}'s agent")
-  else
+    # a broken token must not stall the responder: fall back to the LLM triage for this pass
+    grep -q 'NEW: unclear' <<<"$res" && { echo "script triage failed (see slack_check line), using LLM triage" >&2; res=""; }
+  fi
+  if [ -z "${res:-}" ]; then
     out=$(cd /tmp && EXTRA="--strict-mcp-config $LOCKDOWN" call "Triage only. Make exactly these Slack calls, nothing else:
 1. ${S}_search_public_and_private with exactly: filters \"in:<#$CHANNEL_ID> <@$OWNER_ID>\", keywords [], natural_language_query \"\", after \"${since%.*}\", sort timestamp, response_format detailed, include_context false.
 2. For each thread ts in [${open}]: ${S}_read_thread channel_id $CHANNEL_ID, message_ts <ts>, oldest \"$since\", response_format detailed.
