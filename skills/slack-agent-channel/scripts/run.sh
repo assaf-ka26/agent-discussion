@@ -45,9 +45,10 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 S="mcp__${SLACK_SERVER}__slack"
 TRIAGE_TOOLS="${S}_search_public_and_private,${S}_read_thread"
-ANSWER_TOOLS="Read,Grep,Glob,${S}_read_thread,${S}_read_channel,${S}_search_public_and_private,${S}_search_users,${S}_read_user_profile,Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash($AD/notify.sh:*)"
+# No Slack search or user lookup in the answer stage: an injected message must not make it search DMs.
+ANSWER_TOOLS="Read,Grep,Glob,${S}_read_thread,${S}_read_channel,Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash($AD/notify.sh:*)"
 [ -n "${EXTRA_TOOLS:-}" ] && ANSWER_TOOLS="$ANSWER_TOOLS,$EXTRA_TOOLS"
-DENIED="Read(.env),Read(**/.env),Read(~/.aws/**),Read(~/.ssh/**),Read(~/.pgpass),Read($AD/env.sh)"
+DENIED="Read(.env),Read(**/.env),Read(**/.env.*),Read(~/.aws/**),Read(~/.ssh/**),Read(~/.pgpass),Read($AD/env.sh)"
 [ -n "${EXTRA_DENIED:-}" ] && DENIED="$DENIED,$EXTRA_DENIED"
 NOTE=""
 if [ "$DRY_RUN" = 1 ]; then
@@ -55,6 +56,18 @@ if [ "$DRY_RUN" = 1 ]; then
 else
   ANSWER_TOOLS="$ANSWER_TOOLS,${S}_send_message"
 fi
+
+# Guard (guard.py): a PreToolUse hook that scopes file reads, Bash and Slack (see its header). Its deny
+# wins over any other hook's "allow". --setting-sources project,local skips ~/.claude/settings.json, so a
+# user-level hook that answers "allow" (e.g. a command-rewrite hook) can't bypass --allowedTools. That
+# flag also drops user-scope MCP servers, so Slack (and EXTRA_MCP_CONFIGS) are passed explicitly.
+export AGENT_CHANNEL_ID="$CHANNEL_ID" AGENT_OWNER_ID="$OWNER_ID" AGENT_PREFIX="$PREFIX" AGENT_SLACK_SERVER="$SLACK_SERVER"
+export AGENT_READ_ROOTS="$WORKDIR${READ_ROOTS:+:$READ_ROOTS}" AGENT_SECRET_PATHS="${SECRET_PATHS:-}" AGENT_GH_REPO="${GH_REPO:-}"
+AGENT_BASH_PREFIXES=$(tr ',' '\n' <<<"$ANSWER_TOOLS" | sed -n 's/^Bash(\(.*\))$/\1/p' | sed 's/:\*$//')
+export AGENT_BASH_PREFIXES
+printf '{"hooks":{"PreToolUse":[{"matcher":"Read|Grep|Glob|Bash|mcp__%s__.*","hooks":[{"type":"command","command":"python3 \\"%s/guard.py\\""}]}]}}\n' \
+  "$SLACK_SERVER" "$AD" > "$AD/guard-settings.json"
+LOCKDOWN="--setting-sources project,local --settings $AD/guard-settings.json --mcp-config $AD/slack-mcp.json"
 
 state() {  # state <key> → value (lists as csv)
   python3 -c 'import json,sys
@@ -93,32 +106,38 @@ triage() {  # prints "none", "unclear", or a csv of thread-root ts
   since=$(state last_ts); since=${since:-$(( $(date +%s) - 86400 ))}
   open=$(state open_threads)
   start=$(date +%s)
-  out=$(cd /tmp && EXTRA="--strict-mcp-config --mcp-config $AD/slack-mcp.json" call "Triage only. Make exactly these Slack calls, nothing else:
-1. ${S}_search_public_and_private: query \"in:<#$CHANNEL_ID> <@$OWNER_ID>\", after \"${since%.*}\", sort timestamp, response_format detailed, include_context false.
+  out=$(cd /tmp && EXTRA="--strict-mcp-config $LOCKDOWN" call "Triage only. Make exactly these Slack calls, nothing else:
+1. ${S}_search_public_and_private with exactly: filters \"in:<#$CHANNEL_ID> <@$OWNER_ID>\", keywords [], natural_language_query \"\", after \"${since%.*}\", sort timestamp, response_format detailed, include_context false.
 2. For each thread ts in [${open}]: ${S}_read_thread channel_id $CHANNEL_ID, message_ts <ts>, oldest \"$since\", response_format detailed.
 Keep only messages newer than $since that do NOT start with \"$PREFIX\" (also written \":robot_face: ${OWNER_NAME}'s agent\") — those are ours.
 Thread-root ts = the thread_ts in the permalink, or Message_ts when there is none.
-Reply with exactly one line: NEW: <comma-separated thread-root ts of the kept messages> or NEW: none." "$TRIAGE_TOOLS" "$TRIAGE_CAP")
+If any call fails or is blocked, do not retry it another way: reply exactly NEW: unclear.
+Otherwise reply with exactly one line: NEW: <comma-separated thread-root ts of the kept messages> or NEW: none." "$TRIAGE_TOOLS" "$TRIAGE_CAP")
   res=${out#*$'\t'}
   new=$(grep -oE 'NEW: *[0-9][0-9., ]*' <<<"$res" | head -1 | sed 's/NEW: *//; s/ //g')
-  # only an explicit "NEW: none" means nothing new; anything unclear is treated as new
+  # only an explicit "NEW: none" means nothing new; "unclear" keeps the checkpoint, so the next pass retries
   [ -z "$new" ] && { grep -qE 'NEW: *none' <<<"$res" && new=none || new=unclear; }
   [ "$new" = none ] && save_state "$(( start - 120 )).000000" "-"   # 2-min overlap for search indexing
   echo "$new"
 }
 
-answer() {  # answer <ts csv|unclear> [resume-session] → prints session id
+answer() {  # answer <ts csv> [resume-session] → prints session id
   local astart out ot
   astart=$(date +%s)
-  out=$(cd "$WORKDIR" && call "$(cat "$AD/RUNBOOK.md")
+  out=$(cd "$WORKDIR" && EXTRA="$LOCKDOWN ${EXTRA_MCP_CONFIGS:-}" call "$(cat "$AD/RUNBOOK.md")
 
 Channel: $CHANNEL_ID. You are ${OWNER_NAME}'s agent (owner Slack ID $OWNER_ID); prefix every message with \"$PREFIX:\".
 Triage found new messages in these threads (root ts): $1.
-Read only those threads (slack_read_thread). Do not scan the rest of the channel. If the list is \"unclear\", instead search \"in:<#$CHANNEL_ID> <@$OWNER_ID>\" after $(state last_ts) and re-read the open threads [$(state open_threads)].
+Read only those threads (slack_read_thread). Do not scan the rest of the channel.
 Handle them per the runbook. Last line: OPEN_THREADS: <comma-separated thread-root ts still waiting on something>.$NOTE" "$ANSWER_TOOLS" "$ANSWER_CAP" "${2:-}")
-  ot=$(grep -oE 'OPEN_THREADS: *[0-9., ]*' <<<"${out#*$'\t'}" | tail -1 | sed 's/OPEN_THREADS: *//; s/ //g')
-  # checkpoint = when this stage started reading; anything posted later is caught by the next triage
-  save_state "$astart.000000" "${ot:--}"
+  if grep -q 'OPEN_THREADS:' <<<"${out#*$'\t'}"; then
+    ot=$(grep -oE 'OPEN_THREADS: *[0-9., ]*' <<<"${out#*$'\t'}" | tail -1 | sed 's/OPEN_THREADS: *//; s/ //g')
+    # checkpoint = when this stage started reading; anything posted later is caught by the next triage.
+    # An empty list clears the open threads.
+    save_state "$astart.000000" "${ot:-,}"
+  else  # the stage did not finish (budget stop, auth, Slack down): keep the checkpoint, retry next pass
+    echo "answer stage did not finish: checkpoint kept"
+  fi
   echo "${out%%$'\t'*}"
 }
 
@@ -126,6 +145,7 @@ echo "=== $(date '+%F %T') pass (model=$MODEL, dry_run=$DRY_RUN)"
 NEW=$(triage)
 echo "triage: NEW=$NEW"
 [ "$NEW" = none ] && { echo "done (nothing new)"; exit 0; }
+[ "$NEW" = unclear ] && { echo "triage unclear: checkpoint kept, next pass retries"; exit 0; }
 SID=$(answer "$NEW")
 [ "$DRY_RUN" = 1 ] && { echo "dry run, done"; exit 0; }
 
@@ -136,6 +156,6 @@ while :; do
   (( now - start >= MAX_RUNTIME )) && { echo "runtime cap hit, done"; break; }
   sleep "$POLL"
   NEW=$(triage); echo "--- $(date '+%T') re-check: NEW=$NEW"
-  [ "$NEW" = none ] && continue
+  [ "$NEW" = none ] || [ "$NEW" = unclear ] && continue
   SID=$(answer "$NEW" "$SID"); last=$(date +%s)
 done

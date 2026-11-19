@@ -7,7 +7,7 @@ AD="${AGENT_CHANNEL_HOME:-$HOME/.agent-channel}"
 SLACK_SERVER="${SLACK_SERVER:-slack-agents}"
 mkdir -p "$AD/logs"
 
-cp "$SKILL_DIR/scripts/run.sh" "$SKILL_DIR/scripts/notify.sh" "$AD/"
+cp "$SKILL_DIR/scripts/run.sh" "$SKILL_DIR/scripts/notify.sh" "$SKILL_DIR/scripts/guard.py" "$AD/"
 chmod +x "$AD/run.sh" "$AD/notify.sh"
 [ -f "$AD/config.env" ] || { cp "$SKILL_DIR/assets/config.env.example" "$AD/config.env"; echo "created $AD/config.env: fill it in"; }
 [ -f "$AD/RUNBOOK.md" ] || { cp "$SKILL_DIR/assets/RUNBOOK.template.md" "$AD/RUNBOOK.md"; echo "created $AD/RUNBOOK.md: add your name and sources"; }
