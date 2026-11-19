@@ -44,6 +44,7 @@ Bundled files:
 - `scripts/install.sh`: creates `~/.agent-channel/`, copies the scripts, writes the config, runbook and Slack-only MCP config, and on macOS renders a launchd plist.
 - `scripts/run.sh`: the responder.
 - `scripts/notify.sh`: local notification for approval requests.
+- `scripts/guard.py`: PreToolUse guard that scopes file reads, Bash commands and Slack calls; `scripts/test_guard.py` tests it.
 - `assets/config.env.example`, `assets/RUNBOOK.template.md`, `assets/launchd.plist.template`.
 
 Walk the user through these steps, filling in values you can look up yourself:
@@ -52,11 +53,13 @@ Walk the user through these steps, filling in values you can look up yourself:
    ```
    claude mcp add --scope user --transport http --client-id 1601185624273.8899143856786 --callback-port 3118 slack-agents https://mcp.slack.com/mcp
    ```
-   The user then runs `/mcp` → `slack-agents` → Authenticate in an interactive session. Check it with `claude mcp get slack-agents`.
+   The user then runs `claude mcp login slack-agents` (or `/mcp` → `slack-agents` → Authenticate in an interactive session). Check it with `claude mcp get slack-agents`. Headless runs also need the CLI itself logged in: `claude auth status`, else `claude auth login`.
 2. **Install**: run `bash <skill-dir>/scripts/install.sh`. It's safe to re-run, and it never overwrites an existing config or runbook.
 3. **Fill in `~/.agent-channel/config.env`**: `CHANNEL_ID`, `OWNER_ID`, `OWNER_NAME`, `WORKDIR` (the project folder whose CLAUDE.md, memory and repos the answer stage should use), `INTERVAL_MIN`, and `EXTRA_TOOLS` for the read-only tools the owner wants available, e.g. `Bash(psql:*)`.
    - If a source needs credentials, export them from `~/.agent-channel/env.sh`. Never pass them in the prompt.
-   - For Postgres, keep `PGOPTIONS=-c default_transaction_read_only=on` so the agent physically can't write.
+   - For Postgres, connect as a **read-only role**. `PGOPTIONS=-c default_transaction_read_only=on` alone can be undone with `SET`.
+   - Guard scope: `READ_ROOTS` (extra readable folders, e.g. the project memory folder), `SECRET_PATHS` (never readable), `GH_REPO` (pin `gh` to one repo).
+   - Headless runs skip user-scope MCP servers (section 4). List the ones the answer stage needs in `EXTRA_MCP_CONFIGS`.
 4. **Edit `~/.agent-channel/RUNBOOK.md`**: list the owner's sources (which repos, which DBs, which logs) and how to reach each one read-only. This is what makes answers good.
 5. **Dry run**: `DRY_RUN=1 ~/.agent-channel/run.sh`, then read `~/.agent-channel/logs/<today>.log`. A quiet pass shows `triage: NEW=none`.
 6. **Schedule it.**
@@ -80,10 +83,12 @@ So a quiet pass is one short Sonnet call with a couple of Slack reads; the full 
 
 Details that make it reliable (keep them if you edit `run.sh`):
 - **Slack's `concise` format hides timestamps and thread IDs**, so triage uses `detailed`. The thread root ts is in the permalink as `thread_ts`.
-- **Only an explicit `NEW: none` counts as nothing new.** Any unclear triage output is treated as new, so a message can't be silently dropped.
+- **Only an explicit `NEW: none` moves the checkpoint.** If a call fails or is blocked, triage answers `NEW: unclear`; `run.sh` keeps the checkpoint and the next pass retries, so a message can't be silently dropped. Likewise the answer stage moves the checkpoint only when it prints `OPEN_THREADS:`.
 - **The checkpoint is the time the answer stage *started*,** not the newest ts the agent saw. Messages posted while it worked are caught next time.
 - **`</dev/null` on every `claude -p`**: otherwise it waits 3 seconds for stdin.
-- **`--permission-mode dontAsk`**: the allow-list is the hard boundary. `Write()` allow rules are refused in this mode, which is why `run.sh` writes the state, not the agent.
+- **`--permission-mode dontAsk`**: the allow-list is the boundary. `Write()` allow rules are refused in this mode, which is why `run.sh` writes the state, not the agent.
+- **A hook that answers `"allow"` overrides `dontAsk`.** Both stages run with `--setting-sources project,local` (no `~/.claude/settings.json` hooks) and `--settings guard-settings.json` (the guard; its deny wins over any allow). That flag also drops user-scope MCP servers, so `run.sh` passes `slack-mcp.json` and `EXTRA_MCP_CONFIGS` explicitly.
+- **The slack-agents search tool takes `filters` + `keywords`, not `query`.** The triage prompt names the fields, and the guard checks them.
 - **The answer stage must end with `OPEN_THREADS: <ts list>`**; that's how triage knows which threads to keep watching.
 
 ## 5. Operating it
@@ -97,7 +102,9 @@ Details that make it reliable (keep them if you edit `run.sh`):
 
 | Symptom | Cause / fix |
 |---|---|
-| launchd `last exit code = 126`, log says `Operation not permitted` | macOS privacy block: the script or `WORKDIR` is under `~/Documents`, `~/Desktop` or `~/Downloads`. Grant Full Disk Access to `/bin/bash` (System Settings → Privacy & Security → Full Disk Access → + → ⌘⇧G `/bin/bash`), or move things elsewhere. |
+| launchd `last exit code = 126`, log says `Operation not permitted` | macOS privacy block: the script or `WORKDIR` is under `~/Documents`, `~/Desktop` or `~/Downloads`. Move them elsewhere. Avoid granting Full Disk Access to `/bin/bash`: it lets every bash script on the machine read the whole disk. |
+| Log says `Failed to authenticate` | The CLI's own login expired (separate from the desktop app). Run `claude auth login`. |
+| Log shows `agent-channel guard: …` | A tool call outside the guard's scope. If it was legitimate, widen `READ_ROOTS`, `EXTRA_TOOLS` or `GH_REPO` in `config.env`. |
 | Log says `claude CLI not found` | The CLI moved after an update. `run.sh` checks nvm, `~/.local/bin` and Homebrew. Add your path to the list. |
 | Slack tools missing in the log | The user-scope `slack-agents` server isn't authenticated, or `slack-mcp.json` is stale. Re-run `/mcp` → Authenticate, then re-run `install.sh`. |
 | Answers never picked up by the other side | The reply didn't tag the asker (rule 3). |
