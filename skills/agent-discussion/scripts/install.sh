@@ -1,9 +1,9 @@
 #!/bin/bash
-# Installs the agent-relay responder into $AGENT_RELAY_HOME (default ~/.agent-relay).
+# Installs the agent-discussion responder into $AGENT_DISCUSSION_HOME (default ~/.agent-discussion).
 # Safe to re-run: never overwrites an existing config.env or RUNBOOK.md.
 set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-AD="${AGENT_RELAY_HOME:-$HOME/.agent-relay}"
+AD="${AGENT_DISCUSSION_HOME:-$HOME/.agent-discussion}"
 SLACK_SERVER="${SLACK_SERVER:-slack-agents}"
 mkdir -p "$AD/logs"
 
@@ -28,7 +28,7 @@ PY
 if [ "$(uname)" = Darwin ]; then
   # shellcheck source=/dev/null
   INTERVAL_MIN=$( (source "$AD/config.env" 2>/dev/null; echo "${INTERVAL_MIN:-30}") )
-  LABEL="com.$(id -un).agent-relay"
+  LABEL="com.$(id -un).agent-discussion"
   PLIST_DIR="${PLIST_DIR:-$HOME/Library/LaunchAgents}"; mkdir -p "$PLIST_DIR"
   PLIST="$PLIST_DIR/$LABEL.plist"
   sed -e "s|__LABEL__|$LABEL|" -e "s|__HOME__|$AD|g" -e "s|__SECONDS__|$(( INTERVAL_MIN * 60 ))|" \

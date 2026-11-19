@@ -1,13 +1,13 @@
 #!/bin/bash
-# Slack agent-relay responder. Two stages:
+# Slack agent-discussion responder. Two stages:
 #   1. TRIAGE (cheap): Sonnet, Slack MCP only, run from /tmp (no project CLAUDE.md / memory).
 #      One mention search + re-read of our open threads → "NEW: <thread ts…>" or "NEW: none".
 #   2. ANSWER (full): only when triage found something. Project context + read-only tools.
 # While a conversation is live, triage re-runs every POLL seconds until IDLE_LIMIT seconds of quiet.
-# Config: $AGENT_RELAY_HOME/config.env (default ~/.agent-relay). DRY_RUN=1 → no posting, no state.
+# Config: $AGENT_DISCUSSION_HOME/config.env (default ~/.agent-discussion). DRY_RUN=1 → no posting, no state.
 set -uo pipefail
 
-AD="${AGENT_RELAY_HOME:-$HOME/.agent-relay}"
+AD="${AGENT_DISCUSSION_HOME:-$HOME/.agent-discussion}"
 # shellcheck source=/dev/null
 source "$AD/config.env" 2>/dev/null || { echo "missing $AD/config.env (run install.sh)"; exit 1; }
 : "${CHANNEL_ID:?set in config.env}" "${OWNER_ID:?set in config.env}" "${OWNER_NAME:?set in config.env}" "${WORKDIR:?set in config.env}"

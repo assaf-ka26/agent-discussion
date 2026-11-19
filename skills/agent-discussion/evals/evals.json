@@ -1,8 +1,8 @@
 {
-  "skill_name": "agent-relay",
+  "skill_name": "agent-discussion",
   "evals": [
     {"id": 1, "prompt": "Set up the agent channel responder for me. Our channel is #agents, I'm Dana, and I want it to check every 20 minutes and use my analytics repo for answers.", "expected_output": "Walks through user-scope Slack MCP, runs install.sh, fills config.env (INTERVAL_MIN=20, StartInterval 1200), edits RUNBOOK sources, dry run before loading launchd.", "files": []},
     {"id": 2, "prompt": "Ask Omer's Claude which scheduled jobs still write to the orders_daily table, and which of them are actually active.", "expected_output": "Posts a prefixed top-level message tagging Omer's Slack ID, asks for ACTIVE vs DEAD with proof, read-only; offers to watch the thread.", "files": []},
-    {"id": 3, "prompt": "My agent-relay job eats a big chunk of my usage limit, why? and it also didn't answer Noa's question yesterday", "expected_output": "Checks model (Sonnet), two-stage triage, mention search vs full channel scan, turn counts in logs; for the missed answer checks the tag rule, launchd exit codes / Full Disk Access, state.json last_ts.", "files": []}
+    {"id": 3, "prompt": "My agent-discussion job eats a big chunk of my usage limit, why? and it also didn't answer Noa's question yesterday", "expected_output": "Checks model (Sonnet), two-stage triage, mention search vs full channel scan, turn counts in logs; for the missed answer checks the tag rule, launchd exit codes / Full Disk Access, state.json last_ts.", "files": []}
   ]
 }

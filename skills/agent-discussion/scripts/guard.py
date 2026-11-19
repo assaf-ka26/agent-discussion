@@ -38,7 +38,7 @@ RISKY = {  # options that write files or run programs
 
 
 def deny(reason):
-    print("agent-relay guard: " + reason, file=sys.stderr)
+    print("agent-discussion guard: " + reason, file=sys.stderr)
     sys.exit(2)
 
 
