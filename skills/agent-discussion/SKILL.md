@@ -75,18 +75,21 @@ Walk the user through these steps, filling in values you can look up yourself:
 
 ## 4. How the responder stays light
 
-Reading a whole channel with a big model on every tick burns a lot of usage for nothing. `run.sh` avoids that with three rules:
+Reading a whole channel with a big model on every tick burns a lot of usage for nothing. `run.sh` avoids that with these rules:
 
-1. **Sonnet only** (`--model sonnet`). Triage and answers don't need a bigger model.
+1. **The right model per stage.** Triage is a yes/no check, so it uses no model (script) or **Haiku** (`TRIAGE_MODEL`); in a test on real threads Haiku returned exactly the same thread list as Sonnet at about 1/19 of the usage. Answers use **Sonnet** (`MODEL`).
 2. **Read only what concerns the owner**: one search, `in:<#CHANNEL> <@OWNER>`, newer than the last check, plus a re-read of the owner's **open threads** (questions it asked, approvals it's waiting for), kept in `state.json`. It never reads the whole channel or its history.
+   - In open threads, other agents' messages wake it only if they tag the owner; people's messages (including the owner's approval) always do.
+   - An open thread with no activity for `OPEN_TTL_HOURS` (24) stops being watched. To answer a late approval request, the owner tags themselves in the reply.
 3. **Two stages.**
    - **Triage** decides whether anything is new and prints `NEW: <thread ts list>`, `NEW: none` or `NEW: unclear`.
      - **Script triage (default when `SLACK_TOKEN` is set)**: `slack_check.py` calls `search.messages` and `conversations.replies` directly. No model, so a quiet pass costs nothing against the plan's usage. If the script fails (bad token, missing scope, Slack down), that pass falls back to the LLM triage.
-     - **LLM triage (fallback, no token)**: a short Sonnet call from `/tmp` (no project CLAUDE.md or memory) with **only** the Slack MCP loaded (`--strict-mcp-config`).
-   - **Answer**: runs only when triage found something. It has the full project context and reads only those threads.
-   - While a conversation is live, triage re-runs every 30 seconds until the channel has been quiet for 2 minutes.
+     - **LLM triage (fallback, no token)**: a short Haiku call from `/tmp` (no project CLAUDE.md or memory) with **only** the Slack MCP loaded (`--strict-mcp-config`) and no built-in tools (`--tools ""`, which halves its context).
+   - **Answer**: runs only when triage found something. It has the full project context, only the built-in tools it uses (`ANSWER_BUILTIN_TOOLS`), and reads only those threads.
+   - After an answer, triage re-checks once after 60 seconds (`POLL` / `IDLE_LIMIT`), in case the other side replied right away.
+4. **Work hours.** With `WORK_DAYS` / `WORK_HOURS` set, runs outside them exit at once; the checkpoint stays put, so the first run in hours catches up on everything.
 
-So a quiet pass is two Slack API calls (or, without a token, one short Sonnet call); the full investigation runs only when someone actually tagged the owner.
+So a quiet pass is two Slack API calls (or, without a token, one short Haiku call), only in work hours; the full investigation runs only when someone actually tagged the owner.
 
 Details that make it reliable (keep them if you edit `run.sh`):
 - **Slack's `concise` format hides timestamps and thread IDs**, so triage uses `detailed`. The thread root ts is in the permalink as `thread_ts`.
