@@ -45,7 +45,8 @@ Bundled files:
 - `scripts/run.sh`: the responder.
 - `scripts/notify.sh`: local notification for approval requests.
 - `scripts/guard.py`: PreToolUse guard that scopes file reads, Bash commands and Slack calls; `scripts/test_guard.py` tests it.
-- `assets/config.env.example`, `assets/RUNBOOK.template.md`, `assets/launchd.plist.template`.
+- `scripts/slack_check.py`: the free triage (plain Slack API calls, no model); `scripts/test_slack_check.py` tests it.
+- `assets/config.env.example`, `assets/RUNBOOK.template.md`, `assets/launchd.plist.template`, `assets/slack-app-manifest.yml`.
 
 Walk the user through these steps, filling in values you can look up yourself:
 
@@ -54,19 +55,23 @@ Walk the user through these steps, filling in values you can look up yourself:
    claude mcp add --scope user --transport http --client-id 1601185624273.8899143856786 --callback-port 3118 slack-agents https://mcp.slack.com/mcp
    ```
    The user then runs `claude mcp login slack-agents` (or `/mcp` → `slack-agents` → Authenticate in an interactive session). Check it with `claude mcp get slack-agents`. Headless runs also need the CLI itself logged in: `claude auth status`, else `claude auth login`.
-2. **Install**: run `bash <skill-dir>/scripts/install.sh`. It's safe to re-run, and it never overwrites an existing config or runbook.
-3. **Fill in `~/.agent-discussion/config.env`**: `CHANNEL_ID`, `OWNER_ID`, `OWNER_NAME`, `WORKDIR` (the project folder whose CLAUDE.md, memory and repos the answer stage should use), `INTERVAL_MIN`, and `EXTRA_TOOLS` for the read-only tools the owner wants available, e.g. `Bash(psql:*)`.
+2. **Recommended: a Slack token for free triage.** With a user token, the "was I tagged?" check is two plain Slack API calls and no model at all, so a quiet pass uses no Claude usage. Without it, `run.sh` falls back to a short Sonnet triage call.
+   - api.slack.com/apps → **Create New App** → **From a manifest** → paste `assets/slack-app-manifest.yml` (user scopes `search:read`, `channels:history`, `groups:history`; read-only).
+   - **Install to Workspace** (some workspaces need an admin to approve), copy the **User OAuth Token** (`xoxp-…`), and after step 3 put `export SLACK_TOKEN=xoxp-…` in `~/.agent-discussion/env.sh` (`chmod 600` it).
+   - `run.sh` keeps the token out of the environment the claude processes inherit; only `slack_check.py` gets it.
+3. **Install**: run `bash <skill-dir>/scripts/install.sh`. It's safe to re-run, and it never overwrites an existing config or runbook.
+4. **Fill in `~/.agent-discussion/config.env`**: `CHANNEL_ID`, `OWNER_ID`, `OWNER_NAME`, `WORKDIR` (the project folder whose CLAUDE.md, memory and repos the answer stage should use), `INTERVAL_MIN`, and `EXTRA_TOOLS` for the read-only tools the owner wants available, e.g. `Bash(psql:*)`.
    - If a source needs credentials, export them from `~/.agent-discussion/env.sh`. Never pass them in the prompt.
    - For Postgres, connect as a **read-only role**. `PGOPTIONS=-c default_transaction_read_only=on` alone can be undone with `SET`.
    - Guard scope: `READ_ROOTS` (extra readable folders, e.g. the project memory folder), `SECRET_PATHS` (never readable), `GH_REPO` (pin `gh` to one repo).
    - Headless runs skip user-scope MCP servers (section 4). List the ones the answer stage needs in `EXTRA_MCP_CONFIGS`.
-4. **Edit `~/.agent-discussion/RUNBOOK.md`**: list the owner's sources (which repos, which DBs, which logs) and how to reach each one read-only. This is what makes answers good.
-5. **Dry run**: `DRY_RUN=1 ~/.agent-discussion/run.sh`, then read `~/.agent-discussion/logs/<today>.log`. A quiet pass shows `triage: NEW=none`.
-6. **Schedule it.**
+5. **Edit `~/.agent-discussion/RUNBOOK.md`**: list the owner's sources (which repos, which DBs, which logs) and how to reach each one read-only. This is what makes answers good.
+6. **Dry run**: `DRY_RUN=1 ~/.agent-discussion/run.sh`, then read `~/.agent-discussion/logs/<today>.log`. The first line shows `triage=script` (token found) or `triage=llm`; a quiet pass shows `triage: NEW=none`.
+7. **Schedule it.**
    - macOS: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`, then `launchctl kickstart gui/$(id -u)/<label>` to run once.
    - Linux: add a cron line, `*/30 * * * * $HOME/.agent-discussion/run.sh`.
-7. **Live test**: have someone post a question tagging the owner. Check that the agent replies in the thread, tags the asker and includes proof.
-8. **Post the schedule** in the channel so others know when to expect answers.
+8. **Live test**: have someone post a question tagging the owner. Check that the agent replies in the thread, tags the asker and includes proof.
+9. **Post the schedule** in the channel so others know when to expect answers.
 
 ## 4. How the responder stays light
 
@@ -75,11 +80,13 @@ Reading a whole channel with a big model on every tick burns a lot of usage for 
 1. **Sonnet only** (`--model sonnet`). Triage and answers don't need a bigger model.
 2. **Read only what concerns the owner**: one search, `in:<#CHANNEL> <@OWNER>`, newer than the last check, plus a re-read of the owner's **open threads** (questions it asked, approvals it's waiting for), kept in `state.json`. It never reads the whole channel or its history.
 3. **Two stages.**
-   - **Triage**: a call from `/tmp` (no project CLAUDE.md or memory) with **only** the Slack MCP loaded (`--strict-mcp-config`). It prints `NEW: <thread ts list>` or `NEW: none`.
+   - **Triage** decides whether anything is new and prints `NEW: <thread ts list>`, `NEW: none` or `NEW: unclear`.
+     - **Script triage (default when `SLACK_TOKEN` is set)**: `slack_check.py` calls `search.messages` and `conversations.replies` directly. No model, so a quiet pass costs nothing against the plan's usage. If the script fails (bad token, missing scope, Slack down), that pass falls back to the LLM triage.
+     - **LLM triage (fallback, no token)**: a short Sonnet call from `/tmp` (no project CLAUDE.md or memory) with **only** the Slack MCP loaded (`--strict-mcp-config`).
    - **Answer**: runs only when triage found something. It has the full project context and reads only those threads.
    - While a conversation is live, triage re-runs every 30 seconds until the channel has been quiet for 2 minutes.
 
-So a quiet pass is one short Sonnet call with a couple of Slack reads; the full investigation runs only when someone actually tagged the owner.
+So a quiet pass is two Slack API calls (or, without a token, one short Sonnet call); the full investigation runs only when someone actually tagged the owner.
 
 Details that make it reliable (keep them if you edit `run.sh`):
 - **Slack's `concise` format hides timestamps and thread IDs**, so triage uses `detailed`. The thread root ts is in the permalink as `thread_ts`.
@@ -102,6 +109,7 @@ Details that make it reliable (keep them if you edit `run.sh`):
 
 | Symptom | Cause / fix |
 |---|---|
+| Log says `slack_check: … invalid_auth` / `missing_scope` / `not_in_channel` / `channel_not_found` | The Slack token is wrong, lacks a scope from `slack-app-manifest.yml`, or the owner isn't a member of a private channel. `run.sh` falls back to the LLM triage for that pass, so nothing is missed, but quiet passes use the model again until the token is fixed. |
 | launchd `last exit code = 126`, log says `Operation not permitted` | macOS privacy block: the script or `WORKDIR` is under `~/Documents`, `~/Desktop` or `~/Downloads`. Move them elsewhere. Avoid granting Full Disk Access to `/bin/bash`: it lets every bash script on the machine read the whole disk. |
 | Log says `Failed to authenticate` | The CLI's own login expired (separate from the desktop app). Run `claude auth login`. |
 | Log shows `agent-discussion guard: …` | A tool call outside the guard's scope. If it was legitimate, widen `READ_ROOTS`, `EXTRA_TOOLS` or `GH_REPO` in `config.env`. |

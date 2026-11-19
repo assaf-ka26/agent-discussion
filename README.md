@@ -15,7 +15,7 @@ This repo is a Claude Code plugin (one [skill](https://docs.claude.com/en/docs/c
 A naive responder reads the whole channel with a big model on every tick, which burns a lot of usage for nothing. This one does as little as possible when nobody needs you:
 1. **Sonnet only.**
 2. **Read only what concerns you**: one Slack search for messages that tag your user, plus your own open threads. It never reads the whole channel.
-3. **Two stages.** A triage call with only the Slack MCP loaded and no project context decides whether anything is new. The full investigation, with your repos, DB and memory, runs only when triage finds something.
+3. **Two stages.** A triage step decides whether anything is new. With a Slack user token it's a plain script (two Slack API calls, **no model at all**), so a quiet check uses nothing from your plan; without a token it falls back to one short Sonnet call. The full investigation, with your repos, DB and memory, runs only when triage finds something.
 
 ## Install
 
@@ -39,7 +39,8 @@ Then, in Claude Code: *"set up agent discussion for me"*. The skill walks throug
    Then `claude mcp login slack-agents` (or `/mcp` → `slack-agents` → Authenticate). The client ID is the one shipped in the official Slack plugin. Headless runs use the CLI's own login: if `claude auth status` says `loggedIn: false`, run `claude auth login`.
 2. Run the skill's `scripts/install.sh` (Claude runs it from the skill's folder). It creates `~/.agent-discussion/` (config, runbook, scripts) and, on macOS, a launchd plist.
 3. Fill in `~/.agent-discussion/config.env` (channel ID, your Slack ID, name, project folder) and list your read-only sources in `RUNBOOK.md`.
-4. Run `DRY_RUN=1 ~/.agent-discussion/run.sh`, check the log, then load the schedule.
+4. Recommended: create a small read-only Slack app from `assets/slack-app-manifest.yml` and put its user token in `~/.agent-discussion/env.sh` (`export SLACK_TOKEN=xoxp-…`). Then the "was I tagged?" check runs with no model at all.
+5. Run `DRY_RUN=1 ~/.agent-discussion/run.sh`, check the log, then load the schedule.
 
 Requirements: Claude Code CLI, the Slack MCP (see above), `python3`, macOS (launchd) or Linux (cron).
 
@@ -71,9 +72,10 @@ Nothing runs until you run `install.sh` and load the schedule yourself.
   - runs your local `claude` CLI headless (`claude -p`, model Sonnet) with `--permission-mode dontAsk`, `--setting-sources project,local` and an explicit allow-list: Slack read/post in the one agents channel (plus the fixed mention search in triage), `Read`/`Grep`/`Glob` under `WORKDIR`, `git log`/`git show`, `gh pr view/list`, and any extra tools you add in `config.env`;
   - writes `guard-settings.json`, which loads `guard.py` as a PreToolUse hook that checks each call's arguments (see Safety model);
   - writes its own state (`state.json`), logs (`logs/`) and a lock directory under `~/.agent-discussion/`;
-  - sources `~/.agent-discussion/env.sh` only if you create it (for read-only credentials of your own sources).
+  - sources `~/.agent-discussion/env.sh` only if you create it (for `SLACK_TOKEN` and read-only credentials of your own sources);
+  - if `SLACK_TOKEN` is set, runs `slack_check.py`, which calls Slack's `search.messages` and `conversations.replies` with that token to see whether you were tagged. Results outside the agents channel are dropped in the script and never reach a model. The token is passed only to that script, not to the claude processes.
 - **`notify.sh`**: a local desktop notification (`osascript` on macOS, `notify-send` on Linux) when your approval is needed.
-- **Network**: the only destinations are Slack (through your authenticated Slack MCP) and Anthropic (through your Claude Code CLI and plan), plus any read-only sources you add yourself. Nothing is downloaded or installed.
+- **Network**: the only destinations are Slack (through your authenticated Slack MCP, and `slack.com/api` directly if you set `SLACK_TOKEN`) and Anthropic (through your Claude Code CLI and plan), plus any read-only sources you add yourself. Nothing is downloaded or installed.
 
 To remove it: `launchctl bootout gui/$(id -u)/com.$(id -un).agent-discussion` (or delete the cron line), then delete `~/.agent-discussion/` and the plist.
 
@@ -88,7 +90,9 @@ skills/agent-discussion/
 ├── scripts/notify.sh            local notification (macOS / Linux)
 ├── scripts/guard.py             PreToolUse guard: scopes file reads, Bash and Slack
 ├── scripts/test_guard.py        guard tests (python3 test_guard.py)
-└── assets/                      config.env.example, RUNBOOK.template.md, launchd.plist.template
+├── scripts/slack_check.py       free triage: was I tagged? (Slack API, no model)
+├── scripts/test_slack_check.py  its tests
+└── assets/                      config.env.example, RUNBOOK.template.md, launchd.plist.template, slack-app-manifest.yml
 ```
 
 ## License
