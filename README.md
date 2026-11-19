@@ -13,9 +13,10 @@ This repo is a Claude Code plugin (one [skill](https://docs.claude.com/en/docs/c
 ## Why it's light
 
 A naive responder reads the whole channel with a big model on every tick, which burns a lot of usage for nothing. This one does as little as possible when nobody needs you:
-1. **Sonnet only.**
+1. **The right model per stage.** The "anything for me?" check needs no model (with a Slack token) or Haiku; only real answers use Sonnet.
 2. **Read only what concerns you**: one Slack search for messages that tag your user, plus your own open threads. It never reads the whole channel.
-3. **Two stages.** A triage step decides whether anything is new. With a Slack user token it's a plain script (two Slack API calls, **no model at all**), so a quiet check uses nothing from your plan; without a token it falls back to one short Sonnet call. The full investigation, with your repos, DB and memory, runs only when triage finds something.
+3. **Two stages.** A triage step decides whether anything is new. With a Slack user token it's a plain script (two Slack API calls, **no model at all**), so a quiet check uses nothing from your plan; without a token it falls back to one short Haiku call with no built-in tools loaded. The full investigation, with your repos, DB and memory, runs only when triage finds something.
+4. **Only when it matters.** Optional work hours (`WORK_DAYS`, `WORK_HOURS`); in open threads, other agents' replies wake it only if they tag you; idle threads stop being watched after 24h; one re-check after an answer instead of a polling loop.
 
 ## Install
 
@@ -69,7 +70,7 @@ Nothing runs until you run `install.sh` and load the schedule yourself.
   - reads `~/.claude.json` and copies **only** the `slack-agents` MCP server entry (URL and OAuth client ID, no tokens; Claude Code keeps those in its own credential store) into `~/.agent-discussion/slack-mcp.json`;
   - on macOS, writes a launchd plist to `~/Library/LaunchAgents/com.<user>.agent-discussion.plist`. It does **not** load it; you run `launchctl bootstrap` yourself. On Linux it prints a cron line for you to add.
 - **`run.sh`** (on your schedule):
-  - runs your local `claude` CLI headless (`claude -p`, model Sonnet) with `--permission-mode dontAsk`, `--setting-sources project,local` and an explicit allow-list: Slack read/post in the one agents channel (plus the fixed mention search in triage), `Read`/`Grep`/`Glob` under `WORKDIR`, `git log`/`git show`, `gh pr view/list`, and any extra tools you add in `config.env`;
+  - runs your local `claude` CLI headless (`claude -p`: Haiku for triage, Sonnet for answers) with `--permission-mode dontAsk`, `--setting-sources project,local` and an explicit allow-list: Slack read/post in the one agents channel (plus the fixed mention search in triage), `Read`/`Grep`/`Glob` under `WORKDIR`, `git log`/`git show`, `gh pr view/list`, and any extra tools you add in `config.env`;
   - writes `guard-settings.json`, which loads `guard.py` as a PreToolUse hook that checks each call's arguments (see Safety model);
   - writes its own state (`state.json`), logs (`logs/`) and a lock directory under `~/.agent-discussion/`;
   - sources `~/.agent-discussion/env.sh` only if you create it (for `SLACK_TOKEN` and read-only credentials of your own sources);

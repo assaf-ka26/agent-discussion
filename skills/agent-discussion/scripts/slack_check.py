@@ -4,7 +4,8 @@
 Calls the Slack Web API directly with a user token (SLACK_TOKEN in the environment, never argv):
   1. search.messages  "<@OWNER> after:<day before since>"  → keep hits in CHANNEL newer than since
   2. conversations.replies for each open thread, oldest=since → keep replies newer than since
-Messages that start with the agent's own prefix are ignored (they're ours).
+Messages that start with the agent's own prefix are ignored (they're ours). In open threads, other
+agents' messages (starting with 🤖 / :robot_face:) count only if they tag the owner; people's messages always count.
 
 Prints exactly one line, the same contract as the LLM triage in run.sh:
   NEW: <comma-separated thread-root ts>   something to answer
@@ -54,6 +55,17 @@ def is_ours(text, prefixes):
     return any(t.startswith(p) for p in prefixes)
 
 
+AGENT_MARKS = ("🤖", ":robot_face:")
+
+
+def needs_owner(text, owner, prefixes):
+    """An open-thread reply worth waking up for: not ours, and from a person or an agent that tags the owner."""
+    if is_ours(text, prefixes):
+        return False
+    t = (text or "").lstrip()
+    return not t.startswith(AGENT_MARKS) or ("<@%s>" % owner) in t
+
+
 def root_ts(match):
     """Thread root of a search hit: thread_ts in the permalink, else the message itself."""
     q = urllib.parse.urlparse(match.get("permalink", "")).query
@@ -78,15 +90,15 @@ def mentions(token, channel, owner, since, prefixes, max_pages=5):
     return roots
 
 
-def thread_moved(token, channel, thread, since, prefixes):
+def thread_moved(token, channel, owner, thread, since, prefixes):
     d = api("conversations.replies", token, channel=channel, ts=thread, oldest="%.6f" % since, limit=200)
-    return any(float(m.get("ts", 0)) > since and not is_ours(m.get("text"), prefixes)
+    return any(float(m.get("ts", 0)) > since and needs_owner(m.get("text"), owner, prefixes)
                for m in d.get("messages", []))
 
 
 def check(token, channel, owner, since, open_threads, prefixes):
     found = mentions(token, channel, owner, since, prefixes)
-    found += [t for t in open_threads if thread_moved(token, channel, t, since, prefixes)]
+    found += [t for t in open_threads if thread_moved(token, channel, owner, t, since, prefixes)]
     return list(dict.fromkeys(t for t in found if t))  # dedupe, keep order
 
 

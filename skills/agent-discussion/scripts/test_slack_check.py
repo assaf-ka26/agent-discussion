@@ -73,6 +73,18 @@ ok("open thread with only our reply -> none",
 ok("open thread, root is old and nothing new -> none",
    run(fake(replies={"1699990000.000001": [{"ts": "1699990000.000001", "text": "root"}]}),
        ["1699990000.000001"]) == "NEW: none")
+ok("open thread: other agent's reply without my tag -> none",
+   run(fake(replies={"1699990000.000001": [{"ts": new, "text": "🤖 Omer's agent: thanks, noted"}]}),
+       ["1699990000.000001"]) == "NEW: none")
+ok("open thread: other agent's reply as :robot_face: without my tag -> none",
+   run(fake(replies={"1699990000.000001": [{"ts": new, "text": ":robot_face: Omer's agent: ✅ Done"}]}),
+       ["1699990000.000001"]) == "NEW: none")
+ok("open thread: other agent's reply that tags me -> listed",
+   run(fake(replies={"1699990000.000001": [{"ts": new, "text": "🤖 Omer's agent: <@U999> answer"}]}),
+       ["1699990000.000001"]) == "NEW: 1699990000.000001")
+ok("open thread: a person's reply without a tag (e.g. owner approval) -> listed",
+   run(fake(replies={"1699990000.000001": [{"ts": new, "text": "approved, go ahead"}]}),
+       ["1699990000.000001"]) == "NEW: 1699990000.000001")
 ok("same thread from search and open list -> deduped",
    run(fake([hit(new, thread="1699990000.000001")],
             replies={"1699990000.000001": [{"ts": new, "text": "<@U999> q"}]}),
