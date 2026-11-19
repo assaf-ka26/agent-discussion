@@ -42,6 +42,10 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 # Optional: export read-only credentials for your sources (never put them in prompts)
 # shellcheck source=/dev/null
 [ -f "$AD/env.sh" ] && source "$AD/env.sh"
+# Slack user token for the free script triage (slack_check.py). Kept in a non-exported variable,
+# so the claude processes (and anything they run) never inherit it.
+SLACK_CHECK_TOKEN="${SLACK_TOKEN:-}"; unset SLACK_TOKEN
+TRIAGE_MODE=$([ -n "$SLACK_CHECK_TOKEN" ] && echo script || echo llm)
 
 S="mcp__${SLACK_SERVER}__slack"
 TRIAGE_TOOLS="${S}_search_public_and_private,${S}_read_thread"
@@ -106,14 +110,20 @@ triage() {  # prints "none", "unclear", or a csv of thread-root ts
   since=$(state last_ts); since=${since:-$(( $(date +%s) - 86400 ))}
   open=$(state open_threads)
   start=$(date +%s)
-  out=$(cd /tmp && EXTRA="--strict-mcp-config $LOCKDOWN" call "Triage only. Make exactly these Slack calls, nothing else:
+  if [ "$TRIAGE_MODE" = script ]; then
+    # free: plain Slack API calls, no model. Same one-line contract as the LLM triage below.
+    res=$(SLACK_TOKEN="$SLACK_CHECK_TOKEN" python3 "$AD/slack_check.py" --channel "$CHANNEL_ID" --owner "$OWNER_ID" \
+      --since "$since" --open "$open" --prefix "$PREFIX" --prefix ":robot_face: ${OWNER_NAME}'s agent")
+  else
+    out=$(cd /tmp && EXTRA="--strict-mcp-config $LOCKDOWN" call "Triage only. Make exactly these Slack calls, nothing else:
 1. ${S}_search_public_and_private with exactly: filters \"in:<#$CHANNEL_ID> <@$OWNER_ID>\", keywords [], natural_language_query \"\", after \"${since%.*}\", sort timestamp, response_format detailed, include_context false.
 2. For each thread ts in [${open}]: ${S}_read_thread channel_id $CHANNEL_ID, message_ts <ts>, oldest \"$since\", response_format detailed.
 Keep only messages newer than $since that do NOT start with \"$PREFIX\" (also written \":robot_face: ${OWNER_NAME}'s agent\") — those are ours.
 Thread-root ts = the thread_ts in the permalink, or Message_ts when there is none.
 If any call fails or is blocked, do not retry it another way: reply exactly NEW: unclear.
 Otherwise reply with exactly one line: NEW: <comma-separated thread-root ts of the kept messages> or NEW: none." "$TRIAGE_TOOLS" "$TRIAGE_CAP")
-  res=${out#*$'\t'}
+    res=${out#*$'\t'}
+  fi
   new=$(grep -oE 'NEW: *[0-9][0-9., ]*' <<<"$res" | head -1 | sed 's/NEW: *//; s/ //g')
   # only an explicit "NEW: none" means nothing new; "unclear" keeps the checkpoint, so the next pass retries
   [ -z "$new" ] && { grep -qE 'NEW: *none' <<<"$res" && new=none || new=unclear; }
@@ -141,7 +151,7 @@ Handle them per the runbook. Last line: OPEN_THREADS: <comma-separated thread-ro
   echo "${out%%$'\t'*}"
 }
 
-echo "=== $(date '+%F %T') pass (model=$MODEL, dry_run=$DRY_RUN)"
+echo "=== $(date '+%F %T') pass (triage=$TRIAGE_MODE, model=$MODEL, dry_run=$DRY_RUN)"
 NEW=$(triage)
 echo "triage: NEW=$NEW"
 [ "$NEW" = none ] && { echo "done (nothing new)"; exit 0; }

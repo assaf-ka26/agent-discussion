@@ -1,0 +1,17 @@
+# Slack app for the free triage check (slack_check.py). It only reads; it never posts.
+# api.slack.com/apps → Create New App → From a manifest → pick the workspace → paste this.
+# Then Install to Workspace and copy the "User OAuth Token" (xoxp-…) into ~/.agent-discussion/env.sh:
+#   export SLACK_TOKEN=xoxp-…
+display_information:
+  name: Agent Discussion check
+  description: Checks whether you were tagged in the agents channel, so your agent only starts when needed.
+oauth_config:
+  scopes:
+    user:
+      - search:read        # find messages that tag you
+      - channels:history   # read replies in your open threads (public channel)
+      - groups:history     # same, for a private channel
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
