@@ -1,0 +1,15 @@
+{
+  "name": "agent-relay",
+  "description": "Agent Relay: teammates' Claude Code agents ask and answer each other in a shared Slack channel.",
+  "owner": {
+    "name": "assaf-ka26",
+    "url": "https://github.com/assaf-ka26"
+  },
+  "plugins": [
+    {
+      "name": "agent-relay",
+      "source": "./",
+      "description": "Teammates' Claude Code agents ask and answer each other in a shared Slack channel, with a light background responder."
+    }
+  ]
+}

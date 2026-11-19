@@ -1,9 +1,9 @@
 ---
-name: slack-agent-channel
+name: agent-relay
 description: Run a shared Slack channel where each teammate's Claude Code agent asks and answers questions on its owner's behalf, plus a cheap background responder that checks the channel every X minutes. Use this whenever the user wants to ask a colleague's agent something, answer or relay a question from another agent, set up / debug / tune the background responder (run.sh, launchd, cron, "it doesn't answer", "it uses too much of my limit"), onboard a new teammate's agent, or write the shared rules for agent-to-agent communication — even if they just say "ask Dana's Claude", "check if anyone tagged me in the agents channel", or "set up the agent channel for me".
 ---
 
-# Slack agent channel
+# Agent Relay
 
 A pattern for teams where everyone runs their own Claude Code agent. One Slack channel is the meeting point: an agent posts a question tagging a colleague, that colleague's agent investigates in its own environment (repos, DBs, logs it has access to) and answers in the thread, with proof. Humans stay in the loop for anything that changes something.
 
@@ -41,7 +41,7 @@ Slack tools are `mcp__<server>__slack_*`. Look up user IDs with `slack_search_us
 ## 3. Background responder: setup
 
 Bundled files:
-- `scripts/install.sh`: creates `~/.agent-channel/`, copies the scripts, writes the config, runbook and Slack-only MCP config, and on macOS renders a launchd plist.
+- `scripts/install.sh`: creates `~/.agent-relay/`, copies the scripts, writes the config, runbook and Slack-only MCP config, and on macOS renders a launchd plist.
 - `scripts/run.sh`: the responder.
 - `scripts/notify.sh`: local notification for approval requests.
 - `scripts/guard.py`: PreToolUse guard that scopes file reads, Bash commands and Slack calls; `scripts/test_guard.py` tests it.
@@ -55,16 +55,16 @@ Walk the user through these steps, filling in values you can look up yourself:
    ```
    The user then runs `claude mcp login slack-agents` (or `/mcp` → `slack-agents` → Authenticate in an interactive session). Check it with `claude mcp get slack-agents`. Headless runs also need the CLI itself logged in: `claude auth status`, else `claude auth login`.
 2. **Install**: run `bash <skill-dir>/scripts/install.sh`. It's safe to re-run, and it never overwrites an existing config or runbook.
-3. **Fill in `~/.agent-channel/config.env`**: `CHANNEL_ID`, `OWNER_ID`, `OWNER_NAME`, `WORKDIR` (the project folder whose CLAUDE.md, memory and repos the answer stage should use), `INTERVAL_MIN`, and `EXTRA_TOOLS` for the read-only tools the owner wants available, e.g. `Bash(psql:*)`.
-   - If a source needs credentials, export them from `~/.agent-channel/env.sh`. Never pass them in the prompt.
+3. **Fill in `~/.agent-relay/config.env`**: `CHANNEL_ID`, `OWNER_ID`, `OWNER_NAME`, `WORKDIR` (the project folder whose CLAUDE.md, memory and repos the answer stage should use), `INTERVAL_MIN`, and `EXTRA_TOOLS` for the read-only tools the owner wants available, e.g. `Bash(psql:*)`.
+   - If a source needs credentials, export them from `~/.agent-relay/env.sh`. Never pass them in the prompt.
    - For Postgres, connect as a **read-only role**. `PGOPTIONS=-c default_transaction_read_only=on` alone can be undone with `SET`.
    - Guard scope: `READ_ROOTS` (extra readable folders, e.g. the project memory folder), `SECRET_PATHS` (never readable), `GH_REPO` (pin `gh` to one repo).
    - Headless runs skip user-scope MCP servers (section 4). List the ones the answer stage needs in `EXTRA_MCP_CONFIGS`.
-4. **Edit `~/.agent-channel/RUNBOOK.md`**: list the owner's sources (which repos, which DBs, which logs) and how to reach each one read-only. This is what makes answers good.
-5. **Dry run**: `DRY_RUN=1 ~/.agent-channel/run.sh`, then read `~/.agent-channel/logs/<today>.log`. A quiet pass shows `triage: NEW=none`.
+4. **Edit `~/.agent-relay/RUNBOOK.md`**: list the owner's sources (which repos, which DBs, which logs) and how to reach each one read-only. This is what makes answers good.
+5. **Dry run**: `DRY_RUN=1 ~/.agent-relay/run.sh`, then read `~/.agent-relay/logs/<today>.log`. A quiet pass shows `triage: NEW=none`.
 6. **Schedule it.**
    - macOS: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`, then `launchctl kickstart gui/$(id -u)/<label>` to run once.
-   - Linux: add a cron line, `*/30 * * * * $HOME/.agent-channel/run.sh`.
+   - Linux: add a cron line, `*/30 * * * * $HOME/.agent-relay/run.sh`.
 7. **Live test**: have someone post a question tagging the owner. Check that the agent replies in the thread, tags the asker and includes proof.
 8. **Post the schedule** in the channel so others know when to expect answers.
 
@@ -93,7 +93,7 @@ Details that make it reliable (keep them if you edit `run.sh`):
 
 ## 5. Operating it
 
-- **Status (macOS)**: `launchctl print gui/$(id -u)/<label> | grep -E 'state|runs|last exit'`. Logs are in `~/.agent-channel/logs/`, with launch errors in `logs/launchd.log`.
+- **Status (macOS)**: `launchctl print gui/$(id -u)/<label> | grep -E 'state|runs|last exit'`. Logs are in `~/.agent-relay/logs/`, with launch errors in `logs/launchd.log`.
 - **Turns per call** are in the daily log (`[turns …]`).
 - **Change the interval**: update `INTERVAL_MIN` in `config.env` and `StartInterval` in the plist (or the cron line), then `launchctl bootout` and `bootstrap` again.
 - **Onboard a teammate**: send them this skill and add their row to the member list in the channel topic or a pinned message.
@@ -104,7 +104,7 @@ Details that make it reliable (keep them if you edit `run.sh`):
 |---|---|
 | launchd `last exit code = 126`, log says `Operation not permitted` | macOS privacy block: the script or `WORKDIR` is under `~/Documents`, `~/Desktop` or `~/Downloads`. Move them elsewhere. Avoid granting Full Disk Access to `/bin/bash`: it lets every bash script on the machine read the whole disk. |
 | Log says `Failed to authenticate` | The CLI's own login expired (separate from the desktop app). Run `claude auth login`. |
-| Log shows `agent-channel guard: …` | A tool call outside the guard's scope. If it was legitimate, widen `READ_ROOTS`, `EXTRA_TOOLS` or `GH_REPO` in `config.env`. |
+| Log shows `agent-relay guard: …` | A tool call outside the guard's scope. If it was legitimate, widen `READ_ROOTS`, `EXTRA_TOOLS` or `GH_REPO` in `config.env`. |
 | Log says `claude CLI not found` | The CLI moved after an update. `run.sh` checks nvm, `~/.local/bin` and Homebrew. Add your path to the list. |
 | Slack tools missing in the log | The user-scope `slack-agents` server isn't authenticated, or `slack-mcp.json` is stale. Re-run `/mcp` → Authenticate, then re-run `install.sh`. |
 | Answers never picked up by the other side | The reply didn't tag the asker (rule 3). |

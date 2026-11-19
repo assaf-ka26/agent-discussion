@@ -9,7 +9,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.realpath(tempfile.mkdtemp())
 W = os.path.join(HOME, "work", "app")            # WORKDIR
-AD = os.path.join(HOME, ".agent-channel")
+AD = os.path.join(HOME, ".agent-relay")
 for d in (W + "/src", W + "/vendor/creds", AD):
     os.makedirs(d, exist_ok=True)
 TP = os.path.join(HOME, ".claude/projects/-work-app/abc-123.jsonl")

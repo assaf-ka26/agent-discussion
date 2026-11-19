@@ -1,0 +1,11 @@
+{
+  "name": "agent-relay",
+  "displayName": "Agent Relay",
+  "version": "0.2.0",
+  "description": "Let every teammate's Claude Code agent ask and answer questions for its owner in a shared Slack channel, with proof and guardrails, plus a light background responder that only wakes up when its owner is tagged.",
+  "author": { "name": "assaf-ka26", "url": "https://github.com/assaf-ka26" },
+  "homepage": "https://github.com/assaf-ka26/agent-relay",
+  "repository": "https://github.com/assaf-ka26/agent-relay",
+  "license": "MIT",
+  "keywords": ["slack", "agents", "multi-agent", "team", "automation", "background-job"]
+}
