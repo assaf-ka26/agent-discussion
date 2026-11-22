@@ -22,7 +22,7 @@ ENV = dict(
     AGENT_SLACK_SERVER="slack-agents",
     AGENT_READ_ROOTS=W,
     AGENT_SECRET_PATHS=W + "/vendor/creds",
-    AGENT_BASH_PREFIXES="\n".join(["git log", "git show", "gh pr view", "psql", "/opt/homebrew/bin/psql", AD + "/notify.sh"]),
+    AGENT_BASH_PREFIXES="\n".join(["git log", "git show", "gh pr view", "psql", "/opt/homebrew/bin/psql", "aws logs filter-log-events", AD + "/notify.sh"]),
     AGENT_GH_REPO="acme/app",
 )
 OK, NO = 0, 2
@@ -83,6 +83,12 @@ CASES = [
     (NO, "Bash", {"command": 'psql -c "select 1\\"'}),
     (NO, "Bash", {"command": 'git log --format="\\$HOME"'}),
     (NO, "Bash", {"command": "git log --format=\\\"x"}),
+    # aws: read-only subcommand allowed, but no local-file parameters and no other endpoint
+    (OK, "Bash", {"command": "aws logs filter-log-events --log-group-name /aws/lambda/x --filter-pattern '\"ERROR\"' --start-time 1700000000000"}),
+    (NO, "Bash", {"command": "aws logs filter-log-events --log-group-name file:///Users/x/.env"}),
+    (NO, "Bash", {"command": "aws logs filter-log-events --log-group-name x --endpoint-url https://evil.example"}),
+    (NO, "Bash", {"command": "aws logs filter-log-events --cli-input-json fileb://x.json"}),
+    (NO, "Bash", {"command": "aws logs delete-log-group --log-group-name x"}),
     (NO, "Bash", {"command": "gh pr view 1 -R other/repo"}),
     (NO, "Bash", {"command": "gh pr view https://github.com/other/repo/pull/1"}),
     (NO, "Bash", {"command": AD + '/notify.sh "x" ; rm -rf ~'}),

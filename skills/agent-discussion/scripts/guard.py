@@ -7,7 +7,7 @@ AGENT_* environment variables below. A deny here wins over any other hook's "all
   Bash            only commands that start with an allowed prefix (AGENT_BASH_PREFIXES, built by
                   run.sh from the Bash(...) rules); no shell operators, $, backticks or backslashes
                   (except \" inside double quotes, for SQL identifiers); no file-writing or exec options
-                  for git; psql only with output-format flags and -c "<SQL>", so its connection is the one
+                  for git; no file:// or --endpoint-url for aws; psql only with output-format flags and -c "<SQL>", so its connection is the one
                   run.sh preset (no other host, user or database); gh pinned to AGENT_GH_REPO if set.
   Slack           read/post only in AGENT_CHANNEL_ID; posts must be thread replies with the prefix;
                   search only the triage query (channel + owner tag); every other Slack tool denied.
@@ -36,6 +36,9 @@ SECRET_PATHS = paths("AGENT_SECRET_PATHS")
 BASH_PREFIXES = [p for p in ENV.get("AGENT_BASH_PREFIXES", "").split("\n") if p]
 RISKY = {  # options that write files or run programs
     "git": r"--(output|ext-diff|textconv|exec|upload-pack|receive-pack|config|no-index)\b",
+    # aws: file:// loads a local file into a parameter and --endpoint-url sends the request elsewhere;
+    # together they would ship a local file to another server
+    "aws": r"fileb?://|--(endpoint-url|cli-input-json|cli-input-yaml|ca-bundle|no-verify-ssl)\b",
 }
 # psql is an allow-list instead: format flags, and flags that take a value we don't need to inspect
 PSQL_FLAGS = r"-[XAtqx1]+|--(csv|no-psqlrc|no-align|tuples-only|quiet|expanded|single-transaction)"
@@ -128,7 +131,7 @@ def check_bash(cmd):
         deny("Bash allows only: " + ", ".join(BASH_PREFIXES))
     tool = os.path.basename(c.split()[0])   # also when called by full path
     if tool in RISKY and re.search(RISKY[tool], c):
-        deny("this %s option writes files or runs programs" % tool)
+        deny("this %s option writes files, runs programs or sends data elsewhere" % tool)
     if tool == "psql":
         check_psql(c)
     if tool == "gh" and GH_REPO:
