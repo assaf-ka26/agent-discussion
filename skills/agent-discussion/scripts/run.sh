@@ -28,6 +28,7 @@ TRIAGE_CAP=${TRIAGE_CAP:-0.50}
 ANSWER_CAP=${ANSWER_CAP:-5}
 SLACK_SERVER=${SLACK_SERVER:-slack-agents}
 DRY_RUN=${DRY_RUN:-0}
+DRAFT=${DRAFT:-0}                      # 1 = never post: save each reply to drafts/ and notify the owner
 PREFIX="🤖 ${OWNER_NAME}'s agent"
 
 # The CLI moves on updates/reinstalls: take the first one that exists
@@ -72,6 +73,8 @@ DENIED="Read(.env),Read(**/.env),Read(**/.env.*),Read(~/.aws/**),Read(~/.ssh/**)
 NOTE=""
 if [ "$DRY_RUN" = 1 ]; then
   NOTE=$'\n\nDRY RUN: do not post or notify. Print each reply you would post, with its thread_ts.'
+elif [ "$DRAFT" = 1 ]; then
+  NOTE=$'\n\nDRAFT MODE: you cannot post, and do not call notify.sh. For each reply you would post, print a line "--- DRAFT for thread <thread_ts>" followed by the full reply text exactly as you would post it. The owner reviews it and posts it.'
 else
   ANSWER_TOOLS="$ANSWER_TOOLS,${S}_send_message"
 fi
@@ -124,8 +127,9 @@ call() {
 try: d=json.load(sys.stdin)
 except Exception as e: print("\t(no json: %s)" % e); sys.exit()
 r=d.get("result") or ""
+if sys.argv[1]: open(sys.argv[1],"w").write(r+"\n")
 print(r, "\n[turns %s, model %s]" % (d.get("num_turns", "?"), ",".join(d.get("modelUsage", {})) or "?"), file=sys.stderr)
-print(d.get("session_id",""), r.replace("\n"," || "), sep="\t")'
+print(d.get("session_id",""), r.replace("\n"," || "), sep="\t")' "${RESULT_FILE:-}"
 }
 
 triage() {  # prints "none", "unclear", or a csv of thread-root ts
@@ -162,7 +166,9 @@ Otherwise reply with exactly one line: NEW: <comma-separated thread-root ts of t
 answer() {  # answer <ts csv> [resume-session] → prints session id
   local astart out ot
   astart=$(date +%s)
-  out=$(cd "$WORKDIR" && TOOLSET="$ANSWER_BUILTIN_TOOLS" EXTRA="$LOCKDOWN ${EXTRA_MCP_CONFIGS:-}" call "$(cat "$AD/RUNBOOK.md")
+  local draft=""
+  [ "$DRAFT" = 1 ] && [ "$DRY_RUN" != 1 ] && { mkdir -p "$AD/drafts"; chmod 700 "$AD/drafts"; draft="$AD/drafts/$(date +%F_%H%M%S).md"; }
+  out=$(cd "$WORKDIR" && RESULT_FILE="$draft" TOOLSET="$ANSWER_BUILTIN_TOOLS" EXTRA="$LOCKDOWN ${EXTRA_MCP_CONFIGS:-}" call "$(cat "$AD/RUNBOOK.md")
 
 Channel: $CHANNEL_ID. You are ${OWNER_NAME}'s agent (owner Slack ID $OWNER_ID); prefix every message with \"$PREFIX:\".
 Triage found new messages in these threads (root ts): $1.
@@ -173,6 +179,8 @@ Handle them per the runbook. Last line: OPEN_THREADS: <comma-separated thread-ro
     # checkpoint = when this stage started reading; anything posted later is caught by the next triage.
     # An empty list clears the open threads.
     save_state "$astart.000000" "${ot:-,}" "$1"
+    # draft mode: the reply is in the file, not in Slack. Tell the owner (a notification, the text stays local).
+    [ -n "$draft" ] && grep -q -- '--- DRAFT' "$draft" && { echo "draft saved: $draft" >&2; "$AD/notify.sh" "Draft reply ready: $draft"; }
   else  # the stage did not finish (budget stop, auth, Slack down): keep the checkpoint, retry next pass
     echo "answer stage did not finish: checkpoint kept"
   fi
@@ -186,6 +194,7 @@ echo "triage: NEW=$NEW"
 [ "$NEW" = unclear ] && { echo "triage unclear: checkpoint kept, next pass retries"; exit 0; }
 SID=$(answer "$NEW")
 [ "$DRY_RUN" = 1 ] && { echo "dry run, done"; exit 0; }
+[ "$DRAFT" = 1 ] && { echo "draft mode, done (nothing posted)"; exit 0; }
 
 start=$(date +%s); last=$start
 while :; do

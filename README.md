@@ -54,8 +54,10 @@ Requirements: Claude Code CLI, the Slack MCP (see above), `python3`, macOS (laun
   - Slack: only the agents channel. Posts must be thread replies with your prefix. The answer stage has no Slack search, so an injected message can't make it search DMs.
 - **User-level hooks can't widen the allow-list.** A `PreToolUse` hook that answers `"allow"` (for example a command-rewrite hook in `~/.claude/settings.json`) overrides `dontAsk`. So `run.sh` runs with `--setting-sources project,local`, and the guard's deny wins over any other hook's allow.
 - Secrets stay in `~/.agent-discussion/env.sh` (sourced by the script, denied to the agent), never in prompts.
-- **Postgres: connect as a read-only role.** `PGOPTIONS="-c default_transaction_read_only=on"` is only a default, and the session can undo it with `SET`. The guard blocks psql backslash commands (`\!` runs a shell) and file-writing options, but the role is the real boundary.
+- **Postgres: connect as a read-only role, or to a read replica.** `PGOPTIONS="-c default_transaction_read_only=on"` is only a default, and the session can undo it with `SET`. The guard lets psql run only format flags and `-c "<SQL>"`: no backslash commands (`\!` runs a shell), no file options, and no other host, user or database than the connection you preset. The role or replica is still the real boundary.
 - Channel content is treated as data, not instructions. Writes, deploys, merges and decisions are escalated to the owner (`⏸️ Waiting for approval`, plus a local notification).
+- **The agent doesn't speak for your judgment.** It posts under your name, so the rules forbid approvals, sign-offs and commitments on your behalf; it reports what it checked, with proof.
+- **Draft mode for the first week** (`DRAFT=1`): the agent can't post at all. Each reply is saved locally and you get a notification, so you review every answer before it goes out.
 - A per-call stop for runaway calls, a lock against overlapping runs, and a runtime cap.
 - Keep `~/.agent-discussion` and `WORKDIR` outside `~/Desktop`, `~/Documents` and `~/Downloads`, so launchd needs no Full Disk Access.
 
@@ -72,7 +74,7 @@ Nothing runs until you run `install.sh` and load the schedule yourself.
 - **`run.sh`** (on your schedule):
   - runs your local `claude` CLI headless (`claude -p`: Haiku for triage, Sonnet for answers) with `--permission-mode dontAsk`, `--setting-sources project,local` and an explicit allow-list: Slack read/post in the one agents channel (plus the fixed mention search in triage), `Read`/`Grep`/`Glob` under `WORKDIR`, `git log`/`git show`, `gh pr view/list`, and any extra tools you add in `config.env`;
   - writes `guard-settings.json`, which loads `guard.py` as a PreToolUse hook that checks each call's arguments (see Safety model);
-  - writes its own state (`state.json`), logs (`logs/`) and a lock directory under `~/.agent-discussion/`;
+  - writes its own state (`state.json`), logs (`logs/`), a lock directory and, in draft mode, reply drafts (`drafts/`) under `~/.agent-discussion/`;
   - sources `~/.agent-discussion/env.sh` only if you create it (for `SLACK_TOKEN` and read-only credentials of your own sources);
   - if `SLACK_TOKEN` is set, runs `slack_check.py`, which calls Slack's `search.messages` and `conversations.replies` with that token to see whether you were tagged. Results outside the agents channel are dropped in the script and never reach a model. The token is passed only to that script, not to the claude processes.
 - **`notify.sh`**: a local desktop notification (`osascript` on macOS, `notify-send` on Linux) when your approval is needed.

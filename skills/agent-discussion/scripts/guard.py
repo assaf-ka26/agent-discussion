@@ -5,8 +5,10 @@ AGENT_* environment variables below. A deny here wins over any other hook's "all
   Read/Grep/Glob  only under AGENT_READ_ROOTS (default: WORKDIR), never .env*, .git/, key files or
                   AGENT_SECRET_PATHS; a recursive Grep may not start above a secret path.
   Bash            only commands that start with an allowed prefix (AGENT_BASH_PREFIXES, built by
-                  run.sh from the Bash(...) rules); no shell operators, $, backticks or backslashes;
-                  no file-writing or exec options for git/psql; gh pinned to AGENT_GH_REPO if set.
+                  run.sh from the Bash(...) rules); no shell operators, $, backticks or backslashes
+                  (except \" inside double quotes, for SQL identifiers); no file-writing or exec options
+                  for git; no file:// or --endpoint-url for aws; psql only with output-format flags and -c "<SQL>", so its connection is the one
+                  run.sh preset (no other host, user or database); gh pinned to AGENT_GH_REPO if set.
   Slack           read/post only in AGENT_CHANNEL_ID; posts must be thread replies with the prefix;
                   search only the triage query (channel + owner tag); every other Slack tool denied.
 Exit 2 with a reason on stderr = deny. Any error also denies (fail closed).
@@ -14,6 +16,7 @@ Exit 2 with a reason on stderr = deny. Any error also denies (fail closed).
 import json
 import os
 import re
+import shlex
 import sys
 
 ENV = os.environ
@@ -33,8 +36,13 @@ SECRET_PATHS = paths("AGENT_SECRET_PATHS")
 BASH_PREFIXES = [p for p in ENV.get("AGENT_BASH_PREFIXES", "").split("\n") if p]
 RISKY = {  # options that write files or run programs
     "git": r"--(output|ext-diff|textconv|exec|upload-pack|receive-pack|config|no-index)\b",
-    "psql": r"(^|\s)(-o|--output|-L|--log-file|-f|--file)(\s|=|$)",
+    # aws: file:// loads a local file into a parameter and --endpoint-url sends the request elsewhere;
+    # together they would ship a local file to another server
+    "aws": r"fileb?://|--(endpoint-url|cli-input-json|cli-input-yaml|ca-bundle|no-verify-ssl)\b",
 }
+# psql is an allow-list instead: format flags, and flags that take a value we don't need to inspect
+PSQL_FLAGS = r"-[XAtqx1]+|--(csv|no-psqlrc|no-align|tuples-only|quiet|expanded|single-transaction)"
+PSQL_VALUE_FLAGS = ("-c", "--command", "-F", "--field-separator", "-v", "--set", "--variable")
 
 
 def deny(reason):
@@ -70,11 +78,19 @@ def check_path(raw, cwd, session_dir, tool, recursive):
 
 
 def plain_command(cmd):
-    """True if cmd has no shell operators, expansions or escapes outside single quotes."""
-    if "\\" in cmd:
-        return False
+    """True if cmd has no shell operators, expansions or escapes outside single quotes.
+    The one escape allowed is \" inside double quotes (SQL identifiers such as "Order Date"): the shell
+    turns it into a plain quote, so the program still never receives a backslash (no psql \! or \copy)."""
     quote = None
-    for ch in cmd:
+    i = -1
+    while i + 1 < len(cmd):
+        i += 1
+        ch = cmd[i]
+        if ch == "\\":
+            if quote == '"' and cmd[i + 1:i + 2] == '"':
+                i += 1
+                continue
+            return False
         if quote == "'":
             quote = None if ch == "'" else quote
         elif ch in "$`":
@@ -88,15 +104,36 @@ def plain_command(cmd):
     return quote is None
 
 
+def check_psql(c):
+    """Only output-format flags and -c "<SQL>". The connection comes from the environment run.sh preset,
+    so the agent can't point psql at another host, user or database, write a file or run a script."""
+    try:
+        args = shlex.split(c)[1:]
+    except ValueError:
+        deny("psql: unbalanced quotes")
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in PSQL_VALUE_FLAGS:
+            i += 2
+        elif a.startswith(tuple(f + "=" for f in PSQL_VALUE_FLAGS if f.startswith("--"))) or re.fullmatch(PSQL_FLAGS, a):
+            i += 1
+        else:
+            deny('psql allows only -X -A -t -q -x --csv and -c "<SQL>"; the connection is preset in env.sh '
+                 "(no host, user, database, file or output options)")
+
+
 def check_bash(cmd):
     c = cmd.strip()
     if not plain_command(c):
-        deny("one plain command only: no ; & | < > ( ) $ ` or backslashes")
+        deny('one plain command only: no ; & | < > ( ) $ ` or backslashes (\\" inside double quotes is fine)')
     if not any(c == p or c.startswith(p + " ") for p in BASH_PREFIXES):
         deny("Bash allows only: " + ", ".join(BASH_PREFIXES))
-    tool = c.split()[0]
+    tool = os.path.basename(c.split()[0])   # also when called by full path
     if tool in RISKY and re.search(RISKY[tool], c):
-        deny("this %s option writes files or runs programs" % tool)
+        deny("this %s option writes files, runs programs or sends data elsewhere" % tool)
+    if tool == "psql":
+        check_psql(c)
     if tool == "gh" and GH_REPO:
         if re.search(r"(^|\s)(-R|--repo)(\s|=|$)", c):
             deny("gh is pinned to " + GH_REPO)
